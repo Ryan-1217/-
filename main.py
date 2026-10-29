@@ -70,11 +70,16 @@ if st.button("開始計算音色參數"):
                     完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
                     """
 
-                    # 多重模型備援清單 (Base64 編碼：gemini-2.0-flash, gemini-1.5-pro-latest, gemini-2.5-pro)
+                    # 備援模型清單 (Base64 編碼)：
+                    # 1. gemini-3.1-pro-preview
+                    # 2. gemini-1.5-flash
+                    # 3. gemini-2.0-flash
+                    # 4. gemini-1.5-pro
                     candidate_models = [
+                        "Z2VtaW5pLTMuMS1wcm8tcHJldmlldw==",
+                        "Z2VtaW5pLTEuNS1mbGFzaA==",
                         "Z2VtaW5pLTIuMC1mbGFzaA==",
-                        "Z2VtaW5pLTEuNS1wcm8tbGF0ZXN0",
-                        "Z2VtaW5pLTIuNS1wcm8="
+                        "Z2VtaW5pLTEuNS1wcm8="
                     ]
 
                     response = None
