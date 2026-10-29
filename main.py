@@ -39,7 +39,7 @@ if st.button("開始計算音色參數"):
 
         if time_passed < COOLDOWN_SECONDS:
             remaining = int(COOLDOWN_SECONDS - time_passed)
-            st.warning(f"⚠️ 請等待 {remaining} 秒後再試。")
+            st.warning(f"⚠️ 雲端 DSP 核心冷卻中，請等待 {remaining} 秒後再試。")
         else:
             st.session_state['last_api_call_time'] = now
 
@@ -70,12 +70,29 @@ if st.button("開始計算音色參數"):
                     完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
                     """
 
-                    # 載入最搭配的 gemini-1.5-pro 模型 (Base64 編碼隱藏)
-                    encoded_model = "Z2VtaW5pLTEuNS1wcm8="
-                    dsp_model_target = base64.b64decode(encoded_model).decode('utf-8')
+                    # 多重模型備援清單 (Base64 編碼：gemini-2.0-flash, gemini-1.5-pro-latest, gemini-2.5-pro)
+                    candidate_models = [
+                        "Z2VtaW5pLTIuMC1mbGFzaA==",
+                        "Z2VtaW5pLTEuNS1wcm8tbGF0ZXN0",
+                        "Z2VtaW5pLTIuNS1wcm8="
+                    ]
 
-                    model = cloud_dsp.GenerativeModel(dsp_model_target)
-                    response = model.generate_content(algorithm_matrix)
+                    response = None
+                    last_err = None
+
+                    for enc_m in candidate_models:
+                        try:
+                            target_m = base64.b64decode(enc_m).decode('utf-8')
+                            model = cloud_dsp.GenerativeModel(target_m)
+                            response = model.generate_content(algorithm_matrix)
+                            if response and hasattr(response, 'text') and response.text:
+                                break
+                        except Exception as m_err:
+                            last_err = m_err
+                            continue
+
+                    if not response or not hasattr(response, 'text'):
+                        raise last_err if last_err else Exception("無法連線至雲端模型處理單元。")
 
                     result_text = response.text
 
