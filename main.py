@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import time
 import re
+import requests
 import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
 
@@ -12,10 +13,10 @@ st.title("🎸 ToneSmith 智慧數位訊號參數配置系統")
 st.write("透過雲端數位訊號處理 (DSP) 演算法，為您的設備計算最佳音箱與效果器參數。")
 st.markdown("---")
 
-# 初始化 Google Sheets 連線
+# 初始化 Google Sheets 讀取連線
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 1. 快取優化：快取 Google 試算表資料 10 分鐘，不再每次點擊都重新跨網路下載
+# 快取優化：讀取歷史資料庫
 @st.cache_data(ttl=600)
 def fetch_gsheet_data():
     try:
@@ -161,7 +162,6 @@ if st.button("開始計算音色參數"):
 - DSP/效果器單元：{pedal_model}
 """
 
-                    # 2. 提速優化：限制生成 token 數量並調度極速 Flash 模型
                     gen_config = genai.types.GenerationConfig(
                         temperature=0.1,
                         max_output_tokens=1000
@@ -209,7 +209,7 @@ if st.button("開始計算音色參數"):
                 except Exception as e:
                     err_str = str(e)
                     if "429" in err_str or "Quota exceeded" in err_str or "ResourceExhausted" in err_str:
-                        st.error("⚠️ 雲端運算連線較繁忙，請等待 10 秒後再點擊一次。")
+                        st.error("⚠️ 雲端運算連線較繁忙，請等待 10 秒後再試。")
                     else:
                         st.error(f"系統偵錯資訊：{e}")
 
@@ -224,10 +224,8 @@ if 'last_result' in st.session_state:
 
     if st.button("提交回饋並儲存數據"):
         try:
-            with st.spinner("正在寫入 Google 雲端資料庫..."):
-                existing_df = fetch_gsheet_data()
-                
-                new_row = pd.DataFrame([{
+            with st.spinner("正在將數據寫入雲端資料庫..."):
+                payload = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "artist": st.session_state['last_query']['artist'],
                     "song": st.session_state['last_query']['song'],
@@ -236,14 +234,18 @@ if 'last_result' in st.session_state:
                     "generated_result": st.session_state['last_result'],
                     "rating": rating,
                     "comments": comments
-                }])
-                
-                updated_df = pd.concat([existing_df, new_row], ignore_index=True)
-                conn.update(data=updated_df)
-                
-                # 清除快取，確保下次搜尋能立刻吃到新產生的建議
-                st.cache_data.clear()
-                
-                st.success("🎉 回饋數據已成功寫入 Google 試算表！AI 已吸收此實測意見。")
+                }
+
+                # 透過 Web App API 寫入資料
+                webapp_url = st.secrets.get("GSHEET_WEBAPP_URL", "")
+                if not webapp_url:
+                    st.error("未設定 GSHEET_WEBAPP_URL，請至 Streamlit Secrets 配置。")
+                else:
+                    response = requests.post(webapp_url, json=payload, timeout=10)
+                    if response.status_code == 200:
+                        st.cache_data.clear()
+                        st.success("🎉 回饋數據已成功寫入 Google 試算表！AI 已吸收此實測意見。")
+                    else:
+                        st.error(f"寫入失敗，狀態碼：{response.status_code}")
         except Exception as write_err:
             st.error(f"寫入資料庫失敗：{write_err}")
