@@ -19,16 +19,13 @@ def init_log():
         df.to_csv(LOG_FILE, index=False)
 init_log()
 
-# 硬性後端文字清理器：無論模型吐出多少英文思考過程，強制全數砍掉
+# 後台文字清理器：清除英文思考過程與 LaTeX 符號
 def sanitize_report(raw_text):
     if not raw_text:
         return raw_text
     
-    # 清理可能產生的 LaTeX 數學符號包裹 ($)
     cleaned = raw_text.replace("$", "")
-    
-    # 尋找真正的繁體中文報告開頭關鍵字
-    target_markers = ["ToneSmith", "🎸", "音色配置報告", "【專屬器材設定報告】", "1. 🎸", "一、"]
+    target_markers = ["# ToneSmith", "ToneSmith", "## 1.", "🎸", "【專屬器材設定報告】"]
     
     first_index = -1
     for marker in target_markers:
@@ -37,7 +34,6 @@ def sanitize_report(raw_text):
             if first_index == -1 or pos < first_index:
                 first_index = pos
                 
-    # 若找到報告開頭，直接將前面的所有英文思考與前導贅字全數切除
     if first_index != -1:
         cleaned = cleaned[first_index:]
         
@@ -75,38 +71,46 @@ if st.button("開始計算音色參數"):
 
                     genai.configure(api_key=my_key)
 
-                    # 獨立系統指令
+                    # 強化排版層次與視覺對比的 System Prompt
                     system_prompt = """
-你是 ToneSmith 專業吉他音色配置系統。請直接輸出純繁體中文報告。
+你是 ToneSmith 專業吉他音色配置系統。請直接輸出高視覺對比、繁體中文的專業報告。
 
-【輸出標準格式】
-ToneSmith 專業吉他音色配置報告 - [歌手/樂團] 「[歌曲]」
+【必須嚴格遵守的 Markdown 視覺排版結構】
 
-1. 🎸 音箱與箱體選擇 (Amp & Cab Model)
-- 音箱模型：必須寫出 DSP/效果器中的特定指定名稱 (例如：Brit Chime)
-- 箱體/IR：必須寫出對應搭配的 Cab 模型 (例如：Brit 2x12)
+# 🎸 ToneSmith 音色配置報告：[歌手/樂團] - 《[歌曲]》
 
-2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
-- Gain: 35% (11點鐘方向)
-- Bass: 45% (11點鐘方向)
-- Mid: 55% (1點鐘方向)
-- Treble: 65% (2點鐘方向)
-- Presence: 60% (1點鐘方向)
+> 📌 **設備配置**：[吉他型號] ➔ [DSP/效果器型號]
 
-3. 🔊 前級推動與過載效果器 (Drive / Boost Setup)
-- 效果器模型：指定模型名稱 (例如：T Screamer)
-- 參數設定：Drive 15%, Tone 55%, Level 70%
+---
 
-4. 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)
-- Delay：Digital Delay (Time 350ms, Feedback 25%, Mix 15%)
-- Reverb：Hall Reverb (Decay 2.0s, Mix 25%)
+## 1. 🔊 音箱與箱體選擇 (Amp & Cab Model)
+* **音箱模型**：`[具體模型名稱]` (例如：Twin RVB / Brit Chime)
+* **箱體/IR**：`[具體箱體名稱]` (例如：Twin 212 / Brit 2x12)
 
-5. 💡 拾音器檔位與實力彈奏建議
-- 檔位選擇與彈奏力度建議。
+## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
+* **Gain**：`38%` (10點鐘方向) — *維持清脆通透且帶有些微管機動態壓縮感*
+* **Bass**：`46%` (11點鐘方向) — *收緊低頻以防刷弦時低音混濁*
+* **Mid**：`56%` (1點鐘方向) — *補足單線圈拾音器較薄的中頻穿透力*
+* **Treble**：`62%` (2點鐘方向) — *塑造明亮刮弦感*
+* **Presence**：`55%` (1點鐘方向) — *提升高音泛音延伸度*
+
+## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)
+* **效果器模型**：`[具體模型名稱]` (例如：T Screamer / Overdrive)
+* **參數設定**：Drive `15%`, Tone `55%`, Level `70%`
+
+## 4. 🌊 空間系與周邊效果器 (Delay, Reverb, Mod)
+* **Delay**：`Digital Delay` (Time `350ms`, Feedback `25%`, Mix `15%`)
+* **Reverb**：`Hall Reverb` (Decay `2.0s`, Mix `25%`)
+
+## 5. 💡 拾音器檔位與實力彈奏建議
+* **建議檔位**：`第 4 檔 (頸部+中間)` 適合主歌，`第 2 檔` 適合副歌刷弦。
+* **彈奏細節**：注意右手指法力度與動態控制。
 
 【嚴格禁令】
-- 數字禁止使用 LaTeX 或 $ 符號包裹。
-- 全文禁止出現任何英文推理分析、思考過程或 Self-Correction 紀錄。
+- 標題一律使用 # 與 ## 大標題語法，確保字體放大突出。
+- 數值與關鍵模型名稱請用 ` ` 高亮包裹。
+- 絕對禁止使用 $ 符號或 LaTeX 數學格式。
+- 絕對不要輸出英文思考過程或說明文字。
 """
 
                     user_prompt = f"""
@@ -117,7 +121,6 @@ ToneSmith 專業吉他音色配置報告 - [歌手/樂團] 「[歌曲]」
 - DSP/效果器單元：{pedal_model}
 """
 
-                    # 低溫設定減少模型的碎碎念
                     gen_config = genai.types.GenerationConfig(temperature=0.2)
 
                     candidate_models = [
@@ -167,7 +170,6 @@ ToneSmith 專業吉他音色配置報告 - [歌手/樂團] 「[歌曲]」
                     if not raw_response:
                         raise Exception(f"無法存取雲端模型單元，請確認 API Key 是否設定正確。錯誤資訊：{last_err}")
 
-                    # 後台程式碼強制打回、切除英文與思考紀錄
                     final_report = sanitize_report(raw_response)
 
                     st.session_state['last_result'] = final_report
@@ -179,8 +181,7 @@ ToneSmith 專業吉他音色配置報告 - [歌手/樂團] 「[歌曲]」
                     }
 
                     st.success("音色參數運算完成！")
-                    st.markdown("### 📊 專屬器材設定報告")
-                    st.write(final_report)
+                    st.markdown(final_report)
 
                 except Exception as e:
                     err_str = str(e)
