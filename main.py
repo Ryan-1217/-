@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import os
 import time
+import re
 import google.generativeai as genai
 
 # 介面設定
@@ -17,6 +18,30 @@ def init_log():
         df = pd.DataFrame(columns=["timestamp", "artist", "song", "guitar", "pedal", "generated_result", "rating", "comments"])
         df.to_csv(LOG_FILE, index=False)
 init_log()
+
+# 硬性後端文字清理器：無論模型吐出多少英文思考過程，強制全數砍掉
+def sanitize_report(raw_text):
+    if not raw_text:
+        return raw_text
+    
+    # 清理可能產生的 LaTeX 數學符號包裹 ($)
+    cleaned = raw_text.replace("$", "")
+    
+    # 尋找真正的繁體中文報告開頭關鍵字
+    target_markers = ["ToneSmith", "🎸", "音色配置報告", "【專屬器材設定報告】", "1. 🎸", "一、"]
+    
+    first_index = -1
+    for marker in target_markers:
+        pos = cleaned.find(marker)
+        if pos != -1:
+            if first_index == -1 or pos < first_index:
+                first_index = pos
+                
+    # 若找到報告開頭，直接將前面的所有英文思考與前導贅字全數切除
+    if first_index != -1:
+        cleaned = cleaned[first_index:]
+        
+    return cleaned.strip()
 
 col1, col2 = st.columns(2)
 with col1:
@@ -50,28 +75,50 @@ if st.button("開始計算音色參數"):
 
                     genai.configure(api_key=my_key)
 
-                    # 獨立的系統指令 (隔離 Prompt，防止覆述英文)
+                    # 獨立系統指令
                     system_prompt = """
-你是 ToneSmith 專業吉他音色配置系統。你的任務是直接輸出一份排版清晰的『繁體中文』專業音色參數報告。
+你是 ToneSmith 專業吉他音色配置系統。請直接輸出純繁體中文報告。
 
-【嚴格執行規則】
-1. 你的輸出第一字必須是繁體中文報告標頭，絕對禁止輸出任何英文思考過程、絕對禁止重複或覆述本 Prompt 的內容。
-2. 數字與百分比必須使用純文字格式（例如：45% 或 11點鐘方向），絕對禁止使用美元符號 $ 或 LaTeX 數學公式語法。
-3. 內容必須明確包含以下 5 個繁體中文章節與具體細節：
-   - 🎸 音箱與箱體選擇 (Amp & Cab Model)：必須明確指出該效果器/DSP中的具體音箱模型名稱與 Cab/IR 檔名。
-   - 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)：Gain, Bass, Mid, Treble, Presence 的具體數字與幾點鐘調整方向。
-   - 🔊 前級推動與過載效果器 (Drive / Boost Setup)：指定推動效果器模型名稱，與 Drive, Tone, Level 具體數值。
-   - 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)：指定效果器模型與 Time, Feedback %, Mix % 數值。
-   - 💡 拾音器檔位與實力彈奏建議：建議採用的拾音器切換檔位與撥弦力度細節。
+【輸出標準格式】
+ToneSmith 專業吉他音色配置報告 - [歌手/樂團] 「[歌曲]」
+
+1. 🎸 音箱與箱體選擇 (Amp & Cab Model)
+- 音箱模型：必須寫出 DSP/效果器中的特定指定名稱 (例如：Brit Chime)
+- 箱體/IR：必須寫出對應搭配的 Cab 模型 (例如：Brit 2x12)
+
+2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
+- Gain: 35% (11點鐘方向)
+- Bass: 45% (11點鐘方向)
+- Mid: 55% (1點鐘方向)
+- Treble: 65% (2點鐘方向)
+- Presence: 60% (1點鐘方向)
+
+3. 🔊 前級推動與過載效果器 (Drive / Boost Setup)
+- 效果器模型：指定模型名稱 (例如：T Screamer)
+- 參數設定：Drive 15%, Tone 55%, Level 70%
+
+4. 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)
+- Delay：Digital Delay (Time 350ms, Feedback 25%, Mix 15%)
+- Reverb：Hall Reverb (Decay 2.0s, Mix 25%)
+
+5. 💡 拾音器檔位與實力彈奏建議
+- 檔位選擇與彈奏力度建議。
+
+【嚴格禁令】
+- 數字禁止使用 LaTeX 或 $ 符號包裹。
+- 全文禁止出現任何英文推理分析、思考過程或 Self-Correction 紀錄。
 """
 
                     user_prompt = f"""
-請針對以下器材與曲目計算參數：
+請計算以下器材設定：
 - 歌手/樂團：{artist_name}
 - 目標歌曲：{song_name}
 - 使用吉他：{guitar_model}
 - DSP/效果器單元：{pedal_model}
 """
+
+                    # 低溫設定減少模型的碎碎念
+                    gen_config = genai.types.GenerationConfig(temperature=0.2)
 
                     candidate_models = [
                         "gemini-1.5-flash",
@@ -80,46 +127,50 @@ if st.button("開始計算音色參數"):
                         "gemini-2.5-flash"
                     ]
 
-                    response_text = None
+                    raw_response = None
                     last_err = None
 
                     for m_name in candidate_models:
                         try:
-                            # 套用 system_instruction 徹底封鎖 prompt 洩漏與英文開頭
                             model = genai.GenerativeModel(
                                 m_name,
-                                system_instruction=system_prompt
+                                system_instruction=system_prompt,
+                                generation_config=gen_config
                             )
                             res = model.generate_content(user_prompt)
                             if res and hasattr(res, 'text') and res.text:
-                                response_text = res.text
+                                raw_response = res.text
                                 break
                         except Exception as e:
                             last_err = e
                             continue
 
-                    if not response_text:
+                    if not raw_response:
                         try:
                             for m in genai.list_models():
                                 if "generateContent" in m.supported_generation_methods:
                                     try:
                                         model = genai.GenerativeModel(
                                             m.name,
-                                            system_instruction=system_prompt
+                                            system_instruction=system_prompt,
+                                            generation_config=gen_config
                                         )
                                         res = model.generate_content(user_prompt)
                                         if res and hasattr(res, 'text') and res.text:
-                                            response_text = res.text
+                                            raw_response = res.text
                                             break
                                     except Exception:
                                         continue
                         except Exception as list_err:
                             last_err = list_err
 
-                    if not response_text:
+                    if not raw_response:
                         raise Exception(f"無法存取雲端模型單元，請確認 API Key 是否設定正確。錯誤資訊：{last_err}")
 
-                    st.session_state['last_result'] = response_text
+                    # 後台程式碼強制打回、切除英文與思考紀錄
+                    final_report = sanitize_report(raw_response)
+
+                    st.session_state['last_result'] = final_report
                     st.session_state['last_query'] = {
                         "artist": artist_name,
                         "song": song_name,
@@ -129,7 +180,7 @@ if st.button("開始計算音色參數"):
 
                     st.success("音色參數運算完成！")
                     st.markdown("### 📊 專屬器材設定報告")
-                    st.write(response_text)
+                    st.write(final_report)
 
                 except Exception as e:
                     err_str = str(e)
