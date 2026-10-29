@@ -49,49 +49,39 @@ def get_historical_feedback(artist, song, pedal):
     except Exception:
         return "無法取得歷史紀錄，請按標準演算法計算。"
 
-# 強效排版清理器：解決 404 雜質、灰底框與英文贅字
+# 穩定版文字清理器：解決斷流、灰底框與標題星號
 def sanitize_report(raw_text):
     if not raw_text:
         return raw_text
     
-    # 1. 清除 LaTeX 美元符號與灰底 Code Block 標記
-    cleaned = raw_text.replace("$", "").replace("```markdown", "").replace("```", "")
+    # 1. 徹底移除 ``` 及 LaTeX 美元符號
+    cleaned = raw_text.replace("$", "")
+    cleaned = re.sub(r'```[a-zA-Z]*', '', cleaned)
+    cleaned = cleaned.replace("```", "")
     
-    # 2. 尋找真正的繁體中文大標題開頭
-    match = re.search(r'(#+\s*🎸|#+\s*ToneSmith|【專屬器材設定報告】)', cleaned)
+    # 2. 找到開頭大標題，切除前面無關的導引文字
+    match = re.search(r'(#+\s*🎸|#+\s*ToneSmith)', cleaned)
     if match:
         cleaned = cleaned[match.start():]
         
     lines = cleaned.split("\n")
-    cleaned_lines = []
+    valid_lines = []
     
     for line in lines:
         s = line.strip()
         
-        # 過濾 AI 思考過程中可能洩漏的 Prompt 英文草稿
+        # 濾除 AI 自我解說行
         if any(s.startswith(k) for k in [
-            "* No ", "- No ", "No ", "Artist:", "Song:", "Style:", "Guitar:", "DSP:", 
-            "Amp Model:", "Cab:", "*Self-Correction", "User Input:", "Final Polish"
+            "*Self-Correction", "User Input:", "Final Polish", "Note:", "Notice:"
         ]):
             continue
             
-        # 修正轉換英文標題為高視覺對比中文 Markdown 大標題
-        s = re.sub(r'^\*\s*\*Equipment:\*\s*>?\s*', '> 📌 **設備配置**：', s)
-        s = re.sub(r'^\*\s*\*Section\s*1.*?\*:\s*', '## 1. 🔊 音箱與箱體選擇 (Amp & Cab Model)\n', s)
-        s = re.sub(r'^\*\s*\*Section\s*2.*?\*:\s*', '## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)\n', s)
-        s = re.sub(r'^\*\s*\*Section\s*3.*?\*:\s*', '## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)\n', s)
-        s = re.sub(r'^\*\s*\*Section\s*4.*?\*:\s*', '## 4. 🌊 空間系與周邊效果器 (Delay, Reverb, Mod)\n', s)
-        s = re.sub(r'^\*\s*\*Section\s*5.*?\*:\s*', '## 5. 💡 拾音器檔位與實力彈奏建議\n', s)
+        # 清除標題行開頭被誤加的星號清單點點 (* ## -> ##)
+        s = re.sub(r'^\*\s*(#+)', r'\1', s)
         
-        # 確保標題前面沒有帶點點的項目符號清單 (*)，還原大標題字體
-        s = re.sub(r'^\*\s*(##\s*)', r'\1', s)
-        s = re.sub(r'^\*\s*(#\s*)', r'\1', s)
-        s = re.sub(r'^Section\s*\d+:\s*', '', s, flags=re.IGNORECASE)
+        valid_lines.append(s)
         
-        cleaned_lines.append(s)
-        
-    final_output = "\n".join(cleaned_lines)
-    return final_output.strip()
+    return "\n".join(valid_lines).strip()
 
 col1, col2 = st.columns(2)
 with col1:
@@ -116,7 +106,7 @@ if st.button("開始計算音色參數"):
         else:
             st.session_state['last_api_call_time'] = now
 
-            with st.spinner("正在自動偵測最佳 AI 模型並進行頻段運算中..."):
+            with st.spinner("正在連線至雲端 DSP 核心進行運算中..."):
                 try:
                     if "DSP_KEY" in st.secrets:
                         my_key = st.secrets["DSP_KEY"]
@@ -128,12 +118,12 @@ if st.button("開始計算音色參數"):
                     history_feedback = get_historical_feedback(artist_name, song_name, pedal_model)
 
                     system_prompt = f"""
-你是 ToneSmith 專業吉他音色配置系統。請直接輸出高對比繁體中文報告。
+你是 ToneSmith 專業吉他音色配置系統。請直接完整輸出一份含 5 個章節的繁體中文音色報告。
 
 【歷史樂手實測修正紀錄】
 {history_feedback}
 
-【輸出範本結構】
+【必須完整輸出的 Markdown 範本結構 (請務必將 1 到 5 章節全部寫完，不可中斷)】
 
 # 🎸 ToneSmith 音色配置報告：[歌手/樂團] - 《[歌曲]》
 
@@ -163,6 +153,12 @@ if st.button("開始計算音色參數"):
 ## 5. 💡 拾音器檔位與實力彈奏建議
 * **建議檔位**：`第 4 檔` (主歌), `第 2 檔` (副歌)
 * **彈奏細節**：動態與撥弦力度說明。
+
+【絕對規範】
+1. 開頭必須直接從「# 🎸 ToneSmith」開始。
+2. 必須完整產生全部 5 個章節，絕對不能中途停止。
+3. 嚴禁加入範本以外的自訂欄位（例如「選擇理由」）。
+4. 嚴禁使用程式碼區塊 (```) 包裹全文。
 """
 
                     user_prompt = f"""
@@ -175,22 +171,19 @@ if st.button("開始計算音色參數"):
 
                     gen_config = genai.types.GenerationConfig(
                         temperature=0.1,
-                        max_output_tokens=1000
+                        max_output_tokens=2500
                     )
 
-                    # 動態偵測：搜尋目前 API 金鑰真正可用且支援 content generation 的模型
                     target_models = []
                     try:
                         for m in genai.list_models():
                             if 'generateContent' in m.supported_generation_methods:
                                 target_models.append(m.name)
-                        # 將 flash 系列模型放在最優先位置，確保運算速度
                         flash_first = [m for m in target_models if 'flash' in m.lower()]
                         others = [m for m in target_models if m not in flash_first]
                         target_models = flash_first + others
                     except Exception:
-                        # 備用保險清單
-                        target_models = ["gemini-2.0-flash", "gemini-1.5-flash", "models/gemini-1.5-flash"]
+                        target_models = ["gemini-2.0-flash", "gemini-1.5-flash"]
 
                     raw_response = None
                     last_err = None
@@ -211,7 +204,7 @@ if st.button("開始計算音色參數"):
                             continue
 
                     if not raw_response:
-                        raise Exception(f"無法存取雲端模型單元。請確認 API 金鑰權限或額度。詳細錯誤：{last_err}")
+                        raise Exception(f"無法存取雲端模型單元，請確認 API Key。錯誤資訊：{last_err}")
 
                     final_report = sanitize_report(raw_response)
 
