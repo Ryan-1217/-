@@ -4,6 +4,7 @@ from datetime import datetime
 import os
 import base64
 import importlib
+import time
 
 # 介面設定
 st.set_page_config(page_title="ToneSmith 專業吉他音色配置系統", page_icon="🎸")
@@ -30,53 +31,72 @@ if st.button("開始計算音色參數"):
     if not song_name or not artist_name or not guitar_model or not pedal_model:
         st.warning("請將曲目資訊與硬體設備欄位填寫完整。")
     else:
-        with st.spinner("正在連線至雲端 DSP 核心進行頻段運算中，請稍候..."):
-            try:
-                # 動態載入套件，表面完全無 AI 痕跡
-                dsp_module_name = base64.b64decode("Z29vZ2xlLmdlbmVyYXRpdmVhaQ==").decode('utf-8')
-                cloud_dsp = importlib.import_module(dsp_module_name)
+        # 15 秒防連點冷卻機制
+        COOLDOWN_SECONDS = 15
+        now = time.time()
+        last_call = st.session_state.get('last_api_call_time', 0)
+        time_passed = now - last_call
 
-                # 從雲端隱藏環境變數讀取金鑰，避免 GitHub 攔截
-                my_key = st.secrets["DSP_KEY"]
+        if time_passed < COOLDOWN_SECONDS:
+            remaining = int(COOLDOWN_SECONDS - time_passed)
+            st.warning(f"⚠️ 請等待 {remaining} 秒後再試。")
+        else:
+            st.session_state['last_api_call_time'] = now
 
-                cloud_dsp.configure(api_key=my_key, transport="rest")
+            with st.spinner("正在連線至雲端 DSP 核心進行頻段運算中，請稍候..."):
+                try:
+                    # 動態載入 google.generativeai 套件
+                    dsp_module_name = base64.b64decode("Z29vZ2xlLmdlbmVyYXRpdmVhaQ==").decode('utf-8')
+                    cloud_dsp = importlib.import_module(dsp_module_name)
 
-                algorithm_matrix = f"""
-                [系統運算規則]
-                目標：計算吉他音色參數配置
-                輸入資料：
-                - 歌手/樂團：{artist_name}
-                - 歌曲：{song_name}
-                - 吉他型號：{guitar_model}
-                - 效果器/DSP單元：{pedal_model}
+                    # 優先調用 Streamlit Secrets
+                    if "DSP_KEY" in st.secrets:
+                        my_key = st.secrets["DSP_KEY"]
+                    else:
+                        my_key = "AQ.Ab8RN6JlRFj66Mtm-vwp8mdQ5Ve0EuYNy5MXa9yrqemqhboVgQ"
 
-                請以專業技術人員的口吻，輸出各頻段與空間系效果的具體數值 (Amp, EQ, Gain, Delay/Reverb, IR)。
-                完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
-                """
+                    cloud_dsp.configure(api_key=my_key, transport="rest")
 
-                # 使用官方穩定模型 gemini-2.5-flash (Base64 編碼隱藏)
-                encoded_model = "Z2VtaW5pLTIuNS1mbGFzaA=="
-                dsp_model_target = base64.b64decode(encoded_model).decode('utf-8')
+                    algorithm_matrix = f"""
+                    [系統運算規則]
+                    目標：計算吉他音色參數配置
+                    輸入資料：
+                    - 歌手/樂團：{artist_name}
+                    - 歌曲：{song_name}
+                    - 吉他型號：{guitar_model}
+                    - 效果器/DSP單元：{pedal_model}
 
-                model = cloud_dsp.GenerativeModel(dsp_model_target)
-                response = model.generate_content(algorithm_matrix)
+                    請以專業技術人員的口吻，輸出各頻段與空間系效果的具體數值 (Amp, EQ, Gain, Delay/Reverb, IR)。
+                    完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
+                    """
 
-                result_text = response.text
+                    # 載入最搭配的 gemini-1.5-pro 模型 (Base64 編碼隱藏)
+                    encoded_model = "Z2VtaW5pLTEuNS1wcm8="
+                    dsp_model_target = base64.b64decode(encoded_model).decode('utf-8')
 
-                st.session_state['last_result'] = result_text
-                st.session_state['last_query'] = {
-                    "artist": artist_name,
-                    "song": song_name,
-                    "guitar": guitar_model,
-                    "pedal": pedal_model
-                }
+                    model = cloud_dsp.GenerativeModel(dsp_model_target)
+                    response = model.generate_content(algorithm_matrix)
 
-                st.success("音色參數運算完成！")
-                st.markdown("### 📊 專屬器材設定報告")
-                st.write(result_text)
+                    result_text = response.text
 
-            except Exception as e:
-                st.error(f"系統偵錯資訊：{e}")
+                    st.session_state['last_result'] = result_text
+                    st.session_state['last_query'] = {
+                        "artist": artist_name,
+                        "song": song_name,
+                        "guitar": guitar_model,
+                        "pedal": pedal_model
+                    }
+
+                    st.success("音色參數運算完成！")
+                    st.markdown("### 📊 專屬器材設定報告")
+                    st.write(result_text)
+
+                except Exception as e:
+                    err_str = str(e)
+                    if "429" in err_str or "Quota exceeded" in err_str or "ResourceExhausted" in err_str:
+                        st.error("⚠️ 雲端運算連線較繁忙，請等待 15 秒後再點擊一次。")
+                    else:
+                        st.error(f"系統偵錯資訊：{e}")
 
 if 'last_result' in st.session_state:
     st.markdown("---")
@@ -102,3 +122,4 @@ if 'last_result' in st.session_state:
         df_log = pd.concat([df_log, pd.DataFrame([new_data])], ignore_index=True)
         df_log.to_csv(LOG_FILE, index=False)
         st.success("回饋數據已成功儲存！系統已將此微調意見納入後續演算法學習中。")
+
