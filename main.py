@@ -52,27 +52,48 @@ if st.button("開始計算音色參數"):
 
                     genai.configure(api_key=my_key)
 
+                    # 嚴格約束 Prompt：明確模型名稱、具體微調步驟、禁止 LaTeX 數學格式
                     algorithm_matrix = f"""
-                    [系統運算規則]
-                    目標：計算吉他音色參數配置
-                    輸入資料：
-                    - 歌手/樂團：{artist_name}
-                    - 歌曲：{song_name}
-                    - 吉他型號：{guitar_model}
-                    - 效果器/DSP單元：{pedal_model}
+                    你是 ToneSmith 專業吉他音色配置系統。請針對以下輸入資料，直接輸出一份高品質、排版清晰的『繁體中文』專業音色參數報告。
 
-                    請以專業技術人員的口吻，輸出各頻段與空間系效果的具體數值 (Amp, EQ, Gain, Delay/Reverb, IR)。
-                    完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
+                    【輸入資料】
+                    - 歌手/樂團：{artist_name}
+                    - 目標歌曲：{song_name}
+                    - 使用吉他：{guitar_model}
+                    - DSP/效果器單元：{pedal_model}
+
+                    【嚴格格式與字體規範】
+                    1. 全文必須使用『繁體中文』。
+                    2. 絕對不要輸出任何英文思考過程、推理步驟或 Prompt 規則。
+                    3. 數字與百分比必須使用『純文字』格式（例如：45% 或 11點鐘方向）。**絕對禁止使用美元符號 $ 或 LaTeX 數學公式語法**，確保數字呈現一般網頁標準字體。
+
+                    【內容必須包含以下 5 個結構】
+                    1. 🎸 音箱與箱體選擇 (Amp & Cab Model)
+                       - 必須明確寫出**對應設備中指定的音箱模型名稱**（例如：Fender '65 Deluxe Reverb / Vox AC30 等）。
+                       - 必須明確寫出**指定搭配的 Cab / IR 模擬名稱與規格**。
+
+                    2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
+                       - 列出 Gain, Bass, Mid, Treble, Presence 等旋鈕的**具體數值與幾點鐘調整方向**。
+                       - 說明每個參數「為什麼這樣調」以及聽感調整方向。
+
+                    3. 🔊 前級推動與過載效果器 (Drive / Boost Setup)
+                       - 必須明確寫出**推動效果器的指定模型名稱**（例如：Ibanez TS9 / OD-1 等）。
+                       - 列出 Drive, Tone, Level 的具體調整數值。
+
+                    4. 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)
+                       - 必須明確寫出**效果器類型與模型名稱**。
+                       - 列出 Time (ms 或 BPM 節奏切換), Feedback %, Mix % 與 Decay 的具體數值。
+
+                    5. 💡 拾音器檔位與實力彈奏建議
+                       - 說明建議使用的吉他拾音器檔位（例如：Neck 頸部、第 2 檔等）與撥弦力度細節。
                     """
 
-                    # 第一階段：備援模型輪詢
+                    # 輪詢備援模型
                     candidate_models = [
                         "gemini-1.5-flash",
                         "gemini-1.5-pro",
                         "gemini-2.0-flash",
-                        "gemini-2.5-flash",
-                        "gemini-1.5-flash-latest",
-                        "gemini-1.5-pro-latest"
+                        "gemini-2.5-flash"
                     ]
 
                     response_text = None
@@ -89,7 +110,7 @@ if st.button("開始計算音色參數"):
                             last_err = e
                             continue
 
-                    # 第二階段：如果特定名稱皆失敗，自動線上抓取這組 API Key 目前可用的模型
+                    # 若指定名稱失敗，自動檢索當前可用的模型
                     if not response_text:
                         try:
                             for m in genai.list_models():
