@@ -100,7 +100,7 @@ if st.button("開始計算音色參數"):
         else:
             st.session_state['last_api_call_time'] = now
 
-            with st.spinner("正在連線至極速雲端 DSP 核心進行運算中..."):
+            with st.spinner("正在連線至雲端 DSP 核心進行運算中..."):
                 try:
                     if "DSP_KEY" in st.secrets:
                         my_key = st.secrets["DSP_KEY"]
@@ -167,9 +167,11 @@ if st.button("開始計算音色參數"):
                         max_output_tokens=1000
                     )
 
+                    # 官方標準模型名稱
                     fast_models = [
-                        "gemini-2.5-flash",
-                        "gemini-1.5-flash"
+                        "gemini-2.0-flash",
+                        "gemini-1.5-flash",
+                        "gemini-1.5-pro"
                     ]
 
                     raw_response = None
@@ -190,8 +192,28 @@ if st.button("開始計算音色參數"):
                             last_err = e
                             continue
 
+                    # 若指定名稱皆失敗，動態搜尋當前帳號可用的模型
                     if not raw_response:
-                        raise Exception(f"無法存取雲端模型單元。錯誤資訊：{last_err}")
+                        try:
+                            for m in genai.list_models():
+                                if "generateContent" in m.supported_generation_methods:
+                                    try:
+                                        model = genai.GenerativeModel(
+                                            m.name,
+                                            system_instruction=system_prompt,
+                                            generation_config=gen_config
+                                        )
+                                        res = model.generate_content(user_prompt)
+                                        if res and hasattr(res, 'text') and res.text:
+                                            raw_response = res.text
+                                            break
+                                    except Exception:
+                                        continue
+                        except Exception as list_err:
+                            last_err = list_err
+
+                    if not raw_response:
+                        raise Exception(f"無法存取雲端模型單元，請確認 API Key。錯誤資訊：{last_err}")
 
                     final_report = sanitize_report(raw_response)
 
@@ -236,7 +258,6 @@ if 'last_result' in st.session_state:
                     "comments": comments
                 }
 
-                # 透過 Web App API 寫入資料
                 webapp_url = st.secrets.get("GSHEET_WEBAPP_URL", "")
                 if not webapp_url:
                     st.error("未設定 GSHEET_WEBAPP_URL，請至 Streamlit Secrets 配置。")
