@@ -49,45 +49,49 @@ def get_historical_feedback(artist, song, pedal):
     except Exception:
         return "無法取得歷史紀錄，請按標準演算法計算。"
 
-# 後台強效排版清理器：解決灰底程式碼區塊與英文標題殘留問題
+# 重構版強效文字清理器：徹底破除清單點點縮排與英文雜訊
 def sanitize_report(raw_text):
     if not raw_text:
         return raw_text
     
-    cleaned = raw_text.replace("$", "")
+    # 1. 移除 LaTeX 符號與 Code Block 包裹
+    cleaned = raw_text.replace("$", "").replace("```markdown", "").replace("```", "")
     
-    # 1. 移除 Markdown Code Block 標記 (``` 與 ```markdown)
-    cleaned = re.sub(r'```[a-zA-Z]*', '', cleaned)
-    
-    # 2. 定位真正的中文大標題開頭，切除前面的前導字
+    # 2. 自動切除第一行標題之前的所有英文思考草稿
     match = re.search(r'(#+\s*🎸|#+\s*ToneSmith|【專屬器材設定報告】)', cleaned)
     if match:
         cleaned = cleaned[match.start():]
         
     lines = cleaned.split("\n")
-    valid_lines = []
+    cleaned_lines = []
     
     for line in lines:
-        # 移除每行開頭的多餘空白與縮排 (防 Streamlit 誤判為 Code Block)
-        stripped = line.lstrip()
+        s = line.strip()
         
-        # 3. 過濾常見英文草稿雜質
-        if any(stripped.startswith(k) for k in [
-            "*Self-Correction", "- Genre", "- Specific Song", "Check ", "User Input:", "Final Polish"
+        # 過濾掉模型重複吐出的 Prompt 規則草稿
+        if any(s.startswith(k) for k in [
+            "* No ", "- No ", "No ", "Artist:", "Song:", "Style:", "Guitar:", "DSP:", 
+            "Amp Model:", "Cab:", "*Self-Correction", "User Input:", "Final Polish"
         ]):
             continue
             
-        # 4. 強制把偷跑出來的英文標題替換成美麗的繁體中文大標題
-        stripped = re.sub(r'\*\s*\*Equipment:\*', r'> 📌 **設備配置**：', stripped)
-        stripped = re.sub(r'\*\s*\*Section 1 \(Amp/Cab\):\*', r'## 1. 🔊 音箱與箱體選擇 (Amp & Cab Model)', stripped)
-        stripped = re.sub(r'\*\s*\*Section 2 \(EQ/Gain\):\*', r'## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)', stripped)
-        stripped = re.sub(r'\*\s*\*Section 3 \(Drive\):\*', r'## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)', stripped)
-        stripped = re.sub(r'\*\s*\*Section 4 \(Mod/Delay/Reverb\):\*', r'## 4. 🌊 空間系與周邊效果器 (Delay, Reverb, Mod)', stripped)
-        stripped = re.sub(r'\*\s*\*Section 5.*', r'## 5. 💡 拾音器檔位與實力彈奏建議', stripped)
+        # 消除縮排與清單星號
+        s = re.sub(r'^\*\s*\*Equipment:\*\s*>?\s*', '> 📌 **設備配置**：', s)
+        s = re.sub(r'^\*\s*\*Section\s*1.*?\*:\s*', '## 1. 🔊 音箱與箱體選擇 (Amp & Cab Model)\n', s)
+        s = re.sub(r'^\*\s*\*Section\s*2.*?\*:\s*', '## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)\n', s)
+        s = re.sub(r'^\*\s*\*Section\s*3.*?\*:\s*', '## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)\n', s)
+        s = re.sub(r'^\*\s*\*Section\s*4.*?\*:\s*', '## 4. 🌊 空間系與周邊效果器 (Delay, Reverb, Mod)\n', s)
+        s = re.sub(r'^\*\s*\*Section\s*5.*?\*:\s*', '## 5. 💡 拾音器檔位與實力彈奏建議\n', s)
         
-        valid_lines.append(stripped)
+        # 移除標題前面的清單星號/點點，恢復成真正的大標題
+        s = re.sub(r'^\*\s*(##\s*)', r'\1', s)
+        s = re.sub(r'^\*\s*(#\s*)', r'\1', s)
+        s = re.sub(r'^Section\s*\d+:\s*', '', s, flags=re.IGNORECASE)
         
-    return "\n".join(valid_lines).strip()
+        cleaned_lines.append(s)
+        
+    final_output = "\n".join(cleaned_lines)
+    return final_output.strip()
 
 col1, col2 = st.columns(2)
 with col1:
@@ -123,16 +127,14 @@ if st.button("開始計算音色參數"):
 
                     history_feedback = get_historical_feedback(artist_name, song_name, pedal_model)
 
+                    # 乾淨、無負面指令誘發的 System Prompt
                     system_prompt = f"""
-你是 ToneSmith 專業吉他音色配置系統。請直接輸出純繁體中文報告。
+你是 ToneSmith 專業吉他音色配置系統。請直接輸出高對比繁體中文報告。
 
-【此歌曲/器材之歷史樂手實測修正紀錄】
+【歷史樂手實測修正紀錄】
 {history_feedback}
 
-【嚴格格式要求】
-1. 絕不使用 ``` 或程式碼區塊包裹全文。
-2. 每行開頭絕不留 4 個空格縮排。
-3. 輸出結構必須精準如下：
+【輸出範本結構】
 
 # 🎸 ToneSmith 音色配置報告：[歌手/樂團] - 《[歌曲]》
 
@@ -141,8 +143,8 @@ if st.button("開始計算音色參數"):
 ---
 
 ## 1. 🔊 音箱與箱體選擇 (Amp & Cab Model)
-* **音箱模型**：`[對應效果器內具體模型名稱]`
-* **箱體/IR**：`[對應效果器內具體箱體名稱]`
+* **音箱模型**：`[模型名稱]`
+* **箱體/IR**：`[箱體名稱]`
 
 ## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
 * **Gain**：`35%` (10點鐘方向) — *聽感說明*
@@ -152,7 +154,7 @@ if st.button("開始計算音色參數"):
 * **Presence**：`60%` (1點鐘方向) — *聽感說明*
 
 ## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)
-* **效果器模型**：`[對應效果器內具體模型名稱]`
+* **效果器模型**：`[模型名稱]`
 * **參數設定**：Drive `15%`, Tone `55%`, Level `65%`
 
 ## 4. 🌊 空間系與周邊效果器 (Delay, Reverb, Mod)
@@ -162,11 +164,6 @@ if st.button("開始計算音色參數"):
 ## 5. 💡 拾音器檔位與實力彈奏建議
 * **建議檔位**：`第 4 檔` (主歌), `第 2 檔` (副歌)
 * **彈奏細節**：動態與撥弦力度說明。
-
-【絕對禁令】
-1. 第一個字必須直接從「# 🎸 ToneSmith」開始。
-2. 絕對禁止輸出任何 Section 或 Equipment 等英文單詞標題。
-3. 數字禁止使用 $ 符號包裹。
 """
 
                     user_prompt = f"""
@@ -205,25 +202,6 @@ if st.button("開始計算音色參數"):
                         except Exception as e:
                             last_err = e
                             continue
-
-                    if not raw_response:
-                        try:
-                            for m in genai.list_models():
-                                if "generateContent" in m.supported_generation_methods:
-                                    try:
-                                        model = genai.GenerativeModel(
-                                            m.name,
-                                            system_instruction=system_prompt,
-                                            generation_config=gen_config
-                                        )
-                                        res = model.generate_content(user_prompt)
-                                        if res and hasattr(res, 'text') and res.text:
-                                            raw_response = res.text
-                                            break
-                                    except Exception:
-                                        continue
-                        except Exception as list_err:
-                            last_err = list_err
 
                     if not raw_response:
                         raise Exception(f"無法存取雲端模型單元。錯誤資訊：{last_err}")
