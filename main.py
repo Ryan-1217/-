@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
-import base64
-import importlib
 import time
+import google.generativeai as genai
 
 # 介面設定
 st.set_page_config(page_title="ToneSmith 專業吉他音色配置系統", page_icon="🎸")
@@ -45,17 +44,13 @@ if st.button("開始計算音色參數"):
 
             with st.spinner("正在連線至雲端 DSP 核心進行頻段運算中，請稍候..."):
                 try:
-                    # 動態載入 google.generativeai 套件
-                    dsp_module_name = base64.b64decode("Z29vZ2xlLmdlbmVyYXRpdmVhaQ==").decode('utf-8')
-                    cloud_dsp = importlib.import_module(dsp_module_name)
-
                     # 優先調用 Streamlit Secrets
                     if "DSP_KEY" in st.secrets:
                         my_key = st.secrets["DSP_KEY"]
                     else:
                         my_key = "AQ.Ab8RN6JlRFj66Mtm-vwp8mdQ5Ve0EuYNy5MXa9yrqemqhboVgQ"
 
-                    cloud_dsp.configure(api_key=my_key, transport="rest")
+                    genai.configure(api_key=my_key)
 
                     algorithm_matrix = f"""
                     [系統運算規則]
@@ -70,38 +65,50 @@ if st.button("開始計算音色參數"):
                     完全不要提及你是AI、助手或語言模型，這是一份系統自動產生的參數分析報告。
                     """
 
-                    # 備援模型清單 (Base64 編碼)：
-                    # 1. gemini-3.1-pro-preview
-                    # 2. gemini-1.5-flash
-                    # 3. gemini-2.0-flash
-                    # 4. gemini-1.5-pro
+                    # 第一階段：備援模型輪詢
                     candidate_models = [
-                        "Z2VtaW5pLTMuMS1wcm8tcHJldmlldw==",
-                        "Z2VtaW5pLTEuNS1mbGFzaA==",
-                        "Z2VtaW5pLTIuMC1mbGFzaA==",
-                        "Z2VtaW5pLTEuNS1wcm8="
+                        "gemini-1.5-flash",
+                        "gemini-1.5-pro",
+                        "gemini-2.0-flash",
+                        "gemini-2.5-flash",
+                        "gemini-1.5-flash-latest",
+                        "gemini-1.5-pro-latest"
                     ]
 
-                    response = None
+                    response_text = None
                     last_err = None
 
-                    for enc_m in candidate_models:
+                    for m_name in candidate_models:
                         try:
-                            target_m = base64.b64decode(enc_m).decode('utf-8')
-                            model = cloud_dsp.GenerativeModel(target_m)
-                            response = model.generate_content(algorithm_matrix)
-                            if response and hasattr(response, 'text') and response.text:
+                            model = genai.GenerativeModel(m_name)
+                            res = model.generate_content(algorithm_matrix)
+                            if res and hasattr(res, 'text') and res.text:
+                                response_text = res.text
                                 break
-                        except Exception as m_err:
-                            last_err = m_err
+                        except Exception as e:
+                            last_err = e
                             continue
 
-                    if not response or not hasattr(response, 'text'):
-                        raise last_err if last_err else Exception("無法連線至雲端模型處理單元。")
+                    # 第二階段：如果特定名稱皆失敗，自動線上抓取這組 API Key 目前可用的模型
+                    if not response_text:
+                        try:
+                            for m in genai.list_models():
+                                if "generateContent" in m.supported_generation_methods:
+                                    try:
+                                        model = genai.GenerativeModel(m.name)
+                                        res = model.generate_content(algorithm_matrix)
+                                        if res and hasattr(res, 'text') and res.text:
+                                            response_text = res.text
+                                            break
+                                    except Exception:
+                                        continue
+                        except Exception as list_err:
+                            last_err = list_err
 
-                    result_text = response.text
+                    if not response_text:
+                        raise Exception(f"無法存取雲端模型單元，請確認 API Key 是否設定正確。錯誤資訊：{last_err}")
 
-                    st.session_state['last_result'] = result_text
+                    st.session_state['last_result'] = response_text
                     st.session_state['last_query'] = {
                         "artist": artist_name,
                         "song": song_name,
@@ -111,7 +118,7 @@ if st.button("開始計算音色參數"):
 
                     st.success("音色參數運算完成！")
                     st.markdown("### 📊 專屬器材設定報告")
-                    st.write(result_text)
+                    st.write(response_text)
 
                 except Exception as e:
                     err_str = str(e)
@@ -144,4 +151,3 @@ if 'last_result' in st.session_state:
         df_log = pd.concat([df_log, pd.DataFrame([new_data])], ignore_index=True)
         df_log.to_csv(LOG_FILE, index=False)
         st.success("回饋數據已成功儲存！系統已將此微調意見納入後續演算法學習中。")
-
