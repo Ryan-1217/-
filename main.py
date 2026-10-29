@@ -15,15 +15,20 @@ st.markdown("---")
 # 初始化 Google Sheets 連線
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 讀取 Google 試算表中的歷史回饋，供 AI 參考學習
+# 1. 快取優化：快取 Google 試算表資料 10 分鐘，不再每次點擊都重新跨網路下載
+@st.cache_data(ttl=600)
+def fetch_gsheet_data():
+    try:
+        return conn.read(ttl=600)
+    except Exception:
+        return pd.DataFrame()
+
 def get_historical_feedback(artist, song, pedal):
     try:
-        # 讀取試算表，設置 ttl=5 秒獲得最新數據
-        df = conn.read(ttl=5)
+        df = fetch_gsheet_data()
         if df.empty:
             return "目前尚無歷史實測紀錄。"
 
-        # 搜尋相同歌手、歌曲或效果器的過去回饋 (著重於低評分 1~3 星的改善建議)
         matched = df[
             (df['artist'].astype(str).str.contains(artist, case=False, na=False)) |
             (df['song'].astype(str).str.contains(song, case=False, na=False)) |
@@ -38,13 +43,12 @@ def get_historical_feedback(artist, song, pedal):
                 feedback_notes.append(f"- 【歷史實測評分 {rating_val}星】：{comment_text}")
 
         if feedback_notes:
-            # 只取最新 3 筆關鍵建議給 AI 避坑
             return "\n".join(feedback_notes[-3:])
         return "目前尚無此歌曲/設備的特定修正紀錄。"
-    except Exception as e:
+    except Exception:
         return "無法取得歷史紀錄，請按標準演算法計算。"
 
-# 後台純文字清理器：徹底剔除英文思考、Draft、Self-Correction 與 LaTeX 雜質
+# 後台純文字清理器
 def sanitize_report(raw_text):
     if not raw_text:
         return raw_text
@@ -84,7 +88,7 @@ if st.button("開始計算音色參數"):
     if not song_name or not artist_name or not guitar_model or not pedal_model:
         st.warning("請將曲目資訊與硬體設備欄位填寫完整。")
     else:
-        COOLDOWN_SECONDS = 15
+        COOLDOWN_SECONDS = 10
         now = time.time()
         last_call = st.session_state.get('last_api_call_time', 0)
         time_passed = now - last_call
@@ -95,7 +99,7 @@ if st.button("開始計算音色參數"):
         else:
             st.session_state['last_api_call_time'] = now
 
-            with st.spinner("正在讀取歷史資料庫並連線至雲端 DSP 核心運算中..."):
+            with st.spinner("正在連線至極速雲端 DSP 核心進行運算中..."):
                 try:
                     if "DSP_KEY" in st.secrets:
                         my_key = st.secrets["DSP_KEY"]
@@ -104,16 +108,13 @@ if st.button("開始計算音色參數"):
 
                     genai.configure(api_key=my_key)
 
-                    # 1. 抓取過去樂手給這組器材/歌曲的實測改善建議
                     history_feedback = get_historical_feedback(artist_name, song_name, pedal_model)
 
-                    # 2. 將避坑紀錄融入 System Prompt 讓 AI 動態調整
                     system_prompt = f"""
 你是 ToneSmith 專業吉他音色配置系統。請直接輸出純繁體中文報告，嚴格遵守 Markdown 視覺排版結構。
 
-【此歌曲/器材之歷史樂手實測修正紀錄 (請務必參考並據此優化本次參數)】
+【此歌曲/器材之歷史樂手實測修正紀錄】
 {history_feedback}
-*(說明：若歷史紀錄指出高頻太刺請主動調低 Treble；若指出 Gain 太高請主動調低 Gain；若殘響太重請縮短 Reverb)*
 
 【必須嚴格遵守的排版結構】
 
@@ -128,11 +129,11 @@ if st.button("開始計算音色參數"):
 * **箱體/IR**：`[對應效果器內具體箱體名稱]`
 
 ## 2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
-* **Gain**：`35%` (10點鐘方向) — *聽感說明*
-* **Bass**：`45%` (11點鐘方向) — *聽感說明*
-* **Mid**：`55%` (1點鐘方向) — *聽感說明*
-* **Treble**：`65%` (2點鐘方向) — *聽感說明*
-* **Presence**：`60%` (1點鐘方向) — *聽感說明*
+* **Gain**：`35%` (10點鐘方向) — *簡短聽感說明*
+* **Bass**：`45%` (11點鐘方向) — *簡短聽感說明*
+* **Mid**：`55%` (1點鐘方向) — *簡短聽感說明*
+* **Treble**：`65%` (2點鐘方向) — *簡短聽感說明*
+* **Presence**：`60%` (1點鐘方向) — *簡短聽感說明*
 
 ## 3. ⚡ 前級推動與過載效果器 (Drive / Boost Setup)
 * **效果器模型**：`[對應效果器內具體模型名稱]`
@@ -148,8 +149,8 @@ if st.button("開始計算音色參數"):
 
 【絕對禁令】
 1. 輸出結果第一個字必須直接從「# 🎸 ToneSmith」開始。
-2. 絕對禁止輸出任何英文思考過程、草稿分析、自我修正文字（如 Self-Correction, Genre, Section 等）。
-3. 數字與百分比禁止使用 $ 符號或 LaTeX 公式格式。
+2. 絕對禁止輸出英文思考過程。
+3. 數字與百分比禁止使用 $ 符號。
 """
 
                     user_prompt = f"""
@@ -160,19 +161,21 @@ if st.button("開始計算音色參數"):
 - DSP/效果器單元：{pedal_model}
 """
 
-                    gen_config = genai.types.GenerationConfig(temperature=0.1)
+                    # 2. 提速優化：限制生成 token 數量並調度極速 Flash 模型
+                    gen_config = genai.types.GenerationConfig(
+                        temperature=0.1,
+                        max_output_tokens=1000
+                    )
 
-                    candidate_models = [
-                        "gemini-1.5-flash",
-                        "gemini-1.5-pro",
-                        "gemini-2.0-flash",
-                        "gemini-2.5-flash"
+                    fast_models = [
+                        "gemini-2.5-flash",
+                        "gemini-1.5-flash"
                     ]
 
                     raw_response = None
                     last_err = None
 
-                    for m_name in candidate_models:
+                    for m_name in fast_models:
                         try:
                             model = genai.GenerativeModel(
                                 m_name,
@@ -188,26 +191,7 @@ if st.button("開始計算音色參數"):
                             continue
 
                     if not raw_response:
-                        try:
-                            for m in genai.list_models():
-                                if "generateContent" in m.supported_generation_methods:
-                                    try:
-                                        model = genai.GenerativeModel(
-                                            m.name,
-                                            system_instruction=system_prompt,
-                                            generation_config=gen_config
-                                        )
-                                        res = model.generate_content(user_prompt)
-                                        if res and hasattr(res, 'text') and res.text:
-                                            raw_response = res.text
-                                            break
-                                    except Exception:
-                                        continue
-                        except Exception as list_err:
-                            last_err = list_err
-
-                    if not raw_response:
-                        raise Exception(f"無法存取雲端模型單元，請確認 API Key 是否設定正確。錯誤資訊：{last_err}")
+                        raise Exception(f"無法存取雲端模型單元。錯誤資訊：{last_err}")
 
                     final_report = sanitize_report(raw_response)
 
@@ -225,7 +209,7 @@ if st.button("開始計算音色參數"):
                 except Exception as e:
                     err_str = str(e)
                     if "429" in err_str or "Quota exceeded" in err_str or "ResourceExhausted" in err_str:
-                        st.error("⚠️ 雲端運算連線較繁忙，請等待 15 秒後再點擊一次。")
+                        st.error("⚠️ 雲端運算連線較繁忙，請等待 10 秒後再點擊一次。")
                     else:
                         st.error(f"系統偵錯資訊：{e}")
 
@@ -241,10 +225,8 @@ if 'last_result' in st.session_state:
     if st.button("提交回饋並儲存數據"):
         try:
             with st.spinner("正在寫入 Google 雲端資料庫..."):
-                # 1. 讀取現有試算表
-                existing_df = conn.read(ttl=0)
+                existing_df = fetch_gsheet_data()
                 
-                # 2. 建立新紀錄
                 new_row = pd.DataFrame([{
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "artist": st.session_state['last_query']['artist'],
@@ -256,10 +238,12 @@ if 'last_result' in st.session_state:
                     "comments": comments
                 }])
                 
-                # 3. 合併並更新寫回 Google 試算表
                 updated_df = pd.concat([existing_df, new_row], ignore_index=True)
                 conn.update(data=updated_df)
                 
-                st.success("🎉 回饋數據已成功寫入 Google 試算表！AI 已吸收此實測意見，下一次運算將自動修正音色。")
+                # 清除快取，確保下次搜尋能立刻吃到新產生的建議
+                st.cache_data.clear()
+                
+                st.success("🎉 回饋數據已成功寫入 Google 試算表！AI 已吸收此實測意見。")
         except Exception as write_err:
-            st.error(f"寫入資料庫失敗，請確認試算表網址與共用編輯權限是否設定正確：{write_err}")
+            st.error(f"寫入資料庫失敗：{write_err}")
