@@ -30,7 +30,6 @@ if st.button("開始計算音色參數"):
     if not song_name or not artist_name or not guitar_model or not pedal_model:
         st.warning("請將曲目資訊與硬體設備欄位填寫完整。")
     else:
-        # 15 秒防連點冷卻機制
         COOLDOWN_SECONDS = 15
         now = time.time()
         last_call = st.session_state.get('last_api_call_time', 0)
@@ -44,7 +43,6 @@ if st.button("開始計算音色參數"):
 
             with st.spinner("正在連線至雲端 DSP 核心進行頻段運算中，請稍候..."):
                 try:
-                    # 優先調用 Streamlit Secrets
                     if "DSP_KEY" in st.secrets:
                         my_key = st.secrets["DSP_KEY"]
                     else:
@@ -52,43 +50,29 @@ if st.button("開始計算音色參數"):
 
                     genai.configure(api_key=my_key)
 
-                    # 嚴格約束 Prompt：明確模型名稱、具體微調步驟、禁止 LaTeX 數學格式
-                    algorithm_matrix = f"""
-                    你是 ToneSmith 專業吉他音色配置系統。請針對以下輸入資料，直接輸出一份高品質、排版清晰的『繁體中文』專業音色參數報告。
+                    # 獨立的系統指令 (隔離 Prompt，防止覆述英文)
+                    system_prompt = """
+你是 ToneSmith 專業吉他音色配置系統。你的任務是直接輸出一份排版清晰的『繁體中文』專業音色參數報告。
 
-                    【輸入資料】
-                    - 歌手/樂團：{artist_name}
-                    - 目標歌曲：{song_name}
-                    - 使用吉他：{guitar_model}
-                    - DSP/效果器單元：{pedal_model}
+【嚴格執行規則】
+1. 你的輸出第一字必須是繁體中文報告標頭，絕對禁止輸出任何英文思考過程、絕對禁止重複或覆述本 Prompt 的內容。
+2. 數字與百分比必須使用純文字格式（例如：45% 或 11點鐘方向），絕對禁止使用美元符號 $ 或 LaTeX 數學公式語法。
+3. 內容必須明確包含以下 5 個繁體中文章節與具體細節：
+   - 🎸 音箱與箱體選擇 (Amp & Cab Model)：必須明確指出該效果器/DSP中的具體音箱模型名稱與 Cab/IR 檔名。
+   - 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)：Gain, Bass, Mid, Treble, Presence 的具體數字與幾點鐘調整方向。
+   - 🔊 前級推動與過載效果器 (Drive / Boost Setup)：指定推動效果器模型名稱，與 Drive, Tone, Level 具體數值。
+   - 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)：指定效果器模型與 Time, Feedback %, Mix % 數值。
+   - 💡 拾音器檔位與實力彈奏建議：建議採用的拾音器切換檔位與撥弦力度細節。
+"""
 
-                    【嚴格格式與字體規範】
-                    1. 全文必須使用『繁體中文』。
-                    2. 絕對不要輸出任何英文思考過程、推理步驟或 Prompt 規則。
-                    3. 數字與百分比必須使用『純文字』格式（例如：45% 或 11點鐘方向）。**絕對禁止使用美元符號 $ 或 LaTeX 數學公式語法**，確保數字呈現一般網頁標準字體。
+                    user_prompt = f"""
+請針對以下器材與曲目計算參數：
+- 歌手/樂團：{artist_name}
+- 目標歌曲：{song_name}
+- 使用吉他：{guitar_model}
+- DSP/效果器單元：{pedal_model}
+"""
 
-                    【內容必須包含以下 5 個結構】
-                    1. 🎸 音箱與箱體選擇 (Amp & Cab Model)
-                       - 必須明確寫出**對應設備中指定的音箱模型名稱**（例如：Fender '65 Deluxe Reverb / Vox AC30 等）。
-                       - 必須明確寫出**指定搭配的 Cab / IR 模擬名稱與規格**。
-
-                    2. 🎛️ 音箱細節參數與調整方法 (EQ & Gain Setup)
-                       - 列出 Gain, Bass, Mid, Treble, Presence 等旋鈕的**具體數值與幾點鐘調整方向**。
-                       - 說明每個參數「為什麼這樣調」以及聽感調整方向。
-
-                    3. 🔊 前級推動與過載效果器 (Drive / Boost Setup)
-                       - 必須明確寫出**推動效果器的指定模型名稱**（例如：Ibanez TS9 / OD-1 等）。
-                       - 列出 Drive, Tone, Level 的具體調整數值。
-
-                    4. 🌊 空間系與周邊效果器 (Delay, Reverb, Modulation)
-                       - 必須明確寫出**效果器類型與模型名稱**。
-                       - 列出 Time (ms 或 BPM 節奏切換), Feedback %, Mix % 與 Decay 的具體數值。
-
-                    5. 💡 拾音器檔位與實力彈奏建議
-                       - 說明建議使用的吉他拾音器檔位（例如：Neck 頸部、第 2 檔等）與撥弦力度細節。
-                    """
-
-                    # 輪詢備援模型
                     candidate_models = [
                         "gemini-1.5-flash",
                         "gemini-1.5-pro",
@@ -101,8 +85,12 @@ if st.button("開始計算音色參數"):
 
                     for m_name in candidate_models:
                         try:
-                            model = genai.GenerativeModel(m_name)
-                            res = model.generate_content(algorithm_matrix)
+                            # 套用 system_instruction 徹底封鎖 prompt 洩漏與英文開頭
+                            model = genai.GenerativeModel(
+                                m_name,
+                                system_instruction=system_prompt
+                            )
+                            res = model.generate_content(user_prompt)
                             if res and hasattr(res, 'text') and res.text:
                                 response_text = res.text
                                 break
@@ -110,14 +98,16 @@ if st.button("開始計算音色參數"):
                             last_err = e
                             continue
 
-                    # 若指定名稱失敗，自動檢索當前可用的模型
                     if not response_text:
                         try:
                             for m in genai.list_models():
                                 if "generateContent" in m.supported_generation_methods:
                                     try:
-                                        model = genai.GenerativeModel(m.name)
-                                        res = model.generate_content(algorithm_matrix)
+                                        model = genai.GenerativeModel(
+                                            m.name,
+                                            system_instruction=system_prompt
+                                        )
+                                        res = model.generate_content(user_prompt)
                                         if res and hasattr(res, 'text') and res.text:
                                             response_text = res.text
                                             break
